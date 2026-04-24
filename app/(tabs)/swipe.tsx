@@ -14,6 +14,7 @@ import {
   doc,
   getDoc,
   getDocs,
+  limit,
   query,
   serverTimestamp,
   where,
@@ -23,9 +24,10 @@ import { useAuthRole } from '../../store/authRole';
 import { COLORS, SHADOW } from '../../lib/theme';
 import { t } from '../../lib/i18n';
 import { REGION_COORDINATES } from '../../lib/constants';
-import { MatchProfile, parseInterests, rankMatches, RankedMatch } from '../../lib/matching';
+import { MatchProfile, parseInterests, rankMatches, RankedMatch, haversineKm, finalMatchScore } from '../../lib/matching';
 import { FAKE_ELDERLY_PROFILES } from '../../lib/fakeElderlyProfiles';
 import { FAKE_YOUTH_PROFILES } from '../../lib/fakeYouthProfiles';
+import { buildSampleEvents } from '../../lib/localizedSamples';
 
 type UserRecord = {
   display_name?: string;
@@ -40,17 +42,37 @@ type UserRecord = {
 };
 
 type SwipeCard = RankedMatch & {
+  cardType: 'person' | 'event';
   targetInterests: string[];
   baseFinalScore: number;
   adaptiveScore: number;
+  eventTime?: string;
+  eventLocation?: string;
+  eventHost?: string;
+  eventCategory?: string;
 };
 
 type SwipeMode = 'smart' | 'fake';
+type DeckMode = 'people' | 'events' | 'mixed';
 
 type SwipeEventRow = {
   direction?: 'left' | 'right';
   targetInterests?: string[];
   distanceKm?: number;
+};
+
+type EventRecord = {
+  id: string;
+  name?: string;
+  title?: string;
+  district?: string;
+  location?: string;
+  date?: string;
+  time?: string;
+  description?: string;
+  category?: string;
+  elderlyName?: string;
+  organizer_name?: string;
 };
 
 const { width } = Dimensions.get('window');
@@ -63,6 +85,7 @@ export default function SwipeScreen() {
   const [loading, setLoading] = useState(true);
   const [profileReady, setProfileReady] = useState(true);
   const [swipeMode, setSwipeMode] = useState<SwipeMode>('fake');
+  const [deckMode, setDeckMode] = useState<DeckMode>('mixed');
 
   const pan = useRef(new Animated.ValueXY()).current;
 
@@ -210,6 +233,87 @@ export default function SwipeScreen() {
       .sort((a, b) => b.adaptiveScore - a.adaptiveScore);
   };
 
+  const eventToCard = useCallback(
+    (event: EventRecord, currentProfile: MatchProfile): SwipeCard => {
+      const region = getRegionFromDistrict(event.district);
+      const eventInterests = parseInterests(
+        `${event.category ?? ''};${event.name ?? event.title ?? ''};${event.description ?? ''}`
+      );
+      const sharedInterests = currentProfile.interests.filter((item) =>
+        eventInterests.includes(item)
+      );
+      const jaccardDen = new Set([...currentProfile.interests, ...eventInterests]).size;
+      const jaccardScore = jaccardDen > 0 ? sharedInterests.length / jaccardDen : 0;
+      const distanceKm = haversineKm(
+        currentProfile.latitude,
+        currentProfile.longitude,
+        region.latitude,
+        region.longitude
+      );
+      const finalScore = finalMatchScore(jaccardScore, distanceKm);
+      const eventName = event.name ?? event.title ?? 'Community Event';
+      return {
+        cardType: 'event',
+        targetUid: `event-${event.id}`,
+        targetName: eventName,
+        targetDistrict: event.district,
+        sharedInterests,
+        jaccardScore,
+        distanceKm,
+        finalScore,
+        baseFinalScore: finalScore,
+        adaptiveScore: finalScore,
+        targetInterests: eventInterests,
+        eventTime: `${event.date ?? ''} ${event.time ?? ''}`.trim(),
+        eventLocation: event.location,
+        eventHost: event.elderlyName ?? event.organizer_name,
+        eventCategory: event.category,
+      };
+    },
+    [getRegionFromDistrict]
+  );
+
+  const fetchEventCards = useCallback(
+    async (currentProfile: MatchProfile): Promise<SwipeCard[]> => {
+      try {
+        const snap = await getDocs(query(collection(db, 'events'), limit(40)));
+        const serverEvents = snap.docs.map((d) => ({ id: d.id, ...(d.data() as Omit<EventRecord, 'id'>) }));
+        const source = serverEvents.length > 0
+          ? serverEvents
+          : buildSampleEvents(language).map((event) => ({
+              id: event.id,
+              name: event.name,
+              district: event.district,
+              location: event.location,
+              date: event.date,
+              time: event.time,
+              description: event.description,
+              category: event.category,
+              elderlyName: event.elderlyName,
+            }));
+        return source.map((event) => eventToCard(event, currentProfile));
+      } catch {
+        return buildSampleEvents(language).map((event) =>
+          eventToCard(
+            {
+              id: event.id,
+              name: event.name,
+              district: event.district,
+              location: event.location,
+              date: event.date,
+              time: event.time,
+              description: event.description,
+              category: event.category,
+              elderlyName: event.elderlyName,
+            },
+            currentProfile
+          )
+        );
+      }
+    },
+    [eventToCard, language]
+  );
+
   const fetchPeopleCards = useCallback(async () => {
     if (!uid) {
       setCards([]);
@@ -224,7 +328,7 @@ export default function SwipeScreen() {
       const selfData = selfSnap.data() as UserRecord | undefined;
       const current = selfData ? toProfile(uid, selfData) : null;
 
-      let nextCards: SwipeCard[] = [];
+      let peopleCards: SwipeCard[] = [];
 
       const currentProfile = current ?? buildFallbackCurrent();
 
@@ -247,7 +351,8 @@ export default function SwipeScreen() {
         const ranked = rankMatches(currentProfile, others, 80);
         const interestsByUid = new Map(others.map((item) => [item.uid, item.interests]));
 
-        nextCards = ranked.map((item) => ({
+        peopleCards = ranked.map((item) => ({
+          cardType: 'person',
           ...item,
           baseFinalScore: item.finalScore,
           adaptiveScore: item.finalScore,
@@ -277,12 +382,24 @@ export default function SwipeScreen() {
 
         const ranked = rankMatches(currentProfile, fakeProfiles, 120);
         const fakeMap = new Map(fakeProfiles.map((item) => [item.uid, item]));
-        nextCards = ranked.map((item) => ({
+        peopleCards = ranked.map((item) => ({
+          cardType: 'person',
           ...item,
           baseFinalScore: item.finalScore,
           adaptiveScore: item.finalScore,
           targetInterests: fakeMap.get(item.targetUid)?.interests ?? [],
         }));
+      }
+
+      const eventCards = await fetchEventCards(currentProfile);
+
+      let nextCards: SwipeCard[] = [];
+      if (deckMode === 'people') {
+        nextCards = peopleCards;
+      } else if (deckMode === 'events') {
+        nextCards = eventCards;
+      } else {
+        nextCards = [...peopleCards, ...eventCards].sort((a, b) => b.adaptiveScore - a.adaptiveScore);
       }
 
       const eventsSnap = await getDocs(query(collection(db, 'swipe_events'), where('userId', '==', uid)));
@@ -298,7 +415,7 @@ export default function SwipeScreen() {
     } finally {
       setLoading(false);
     }
-  }, [buildFallbackCurrent, getRegionFromDistrict, role, swipeMode, uid]);
+  }, [buildFallbackCurrent, deckMode, fetchEventCards, getRegionFromDistrict, role, swipeMode, uid]);
 
   useEffect(() => {
     fetchPeopleCards();
@@ -312,7 +429,7 @@ export default function SwipeScreen() {
         userId: uid,
         targetUserId: card.targetUid,
         direction,
-        type: swipeMode === 'fake' ? 'fake_profile' : 'profile',
+        type: card.cardType === 'event' ? 'event' : swipeMode === 'fake' ? 'fake_profile' : 'profile',
         source: swipeMode,
         targetInterests: card.targetInterests,
         distanceKm: card.distanceKm,
@@ -328,7 +445,12 @@ export default function SwipeScreen() {
           youthId: role === 'youth' ? uid : card.targetUid,
           elderlyId: role === 'elderly' ? uid : card.targetUid,
           activityId: card.targetUid,
-          activityType: swipeMode === 'fake' ? 'fake_profile_match' : 'profile_match',
+          activityType:
+            card.cardType === 'event'
+              ? 'event'
+              : swipeMode === 'fake'
+                ? 'fake_profile_match'
+                : 'profile_match',
           activityName: card.targetName,
           final_score: card.baseFinalScore,
           adaptive_score: card.adaptiveScore,
@@ -419,9 +541,9 @@ export default function SwipeScreen() {
   if (!currentCard) {
     return (
       <View style={styles.centered}>
-        <Text style={styles.noMoreText}>No more profiles right now.</Text>
+        <Text style={styles.noMoreText}>No more cards right now.</Text>
         <Pressable style={styles.refreshBtn} onPress={fetchPeopleCards}>
-          <Text style={styles.refreshText}>Reload profiles</Text>
+          <Text style={styles.refreshText}>Reload deck</Text>
         </Pressable>
       </View>
     );
@@ -453,31 +575,50 @@ export default function SwipeScreen() {
         </Pressable>
       </View>
 
+      <View style={styles.modeRow}>
+        <Pressable
+          style={[styles.modeBtn, deckMode === 'people' && styles.modeBtnActive]}
+          onPress={() => setDeckMode('people')}>
+          <Text style={[styles.modeBtnText, deckMode === 'people' && styles.modeBtnTextActive]}>People</Text>
+        </Pressable>
+        <Pressable
+          style={[styles.modeBtn, deckMode === 'events' && styles.modeBtnActive]}
+          onPress={() => setDeckMode('events')}>
+          <Text style={[styles.modeBtnText, deckMode === 'events' && styles.modeBtnTextActive]}>Events</Text>
+        </Pressable>
+        <Pressable
+          style={[styles.modeBtn, deckMode === 'mixed' && styles.modeBtnActive]}
+          onPress={() => setDeckMode('mixed')}>
+          <Text style={[styles.modeBtnText, deckMode === 'mixed' && styles.modeBtnTextActive]}>Mixed</Text>
+        </Pressable>
+      </View>
+
       <View style={styles.deckWrap}>
         {nextCard ? (
           <View style={[styles.card, styles.nextCard]}>
             <Text style={styles.title}>{nextCard.targetName}</Text>
-            <Text style={styles.scoreText}>Adaptive score {nextCard.adaptiveScore.toFixed(3)}</Text>
+            <Text style={styles.scoreText}>
+              {nextCard.cardType === 'event' ? 'Event card' : 'Profile card'}
+            </Text>
           </View>
         ) : null}
 
         <Animated.View style={[styles.card, animatedCardStyle]} {...panResponder.panHandlers}>
           <Text style={styles.title}>{currentCard.targetName}</Text>
-          <View style={styles.metricRow}>
-            <View style={styles.metricChip}>
-              <Text style={styles.metricLabel}>Adaptive</Text>
-              <Text style={styles.metricValue}>{currentCard.adaptiveScore.toFixed(3)}</Text>
-            </View>
-            <View style={styles.metricChip}>
-              <Text style={styles.metricLabel}>Jaccard</Text>
-              <Text style={styles.metricValue}>{currentCard.jaccardScore.toFixed(3)}</Text>
-            </View>
-            <View style={styles.metricChip}>
-              <Text style={styles.metricLabel}>Distance</Text>
-              <Text style={styles.metricValue}>{currentCard.distanceKm.toFixed(1)} km</Text>
-            </View>
-          </View>
+          <Text style={styles.infoText}>Distance: {currentCard.distanceKm.toFixed(1)} km</Text>
           <Text style={styles.infoText}>District: {currentCard.targetDistrict ?? 'Unknown'}</Text>
+
+          {currentCard.cardType === 'event' ? (
+            <View style={styles.section}>
+              <Text style={styles.sectionTitle}>Event details</Text>
+              <Text style={styles.sectionText}>Host: {currentCard.eventHost ?? 'Community organizer'}</Text>
+              <Text style={styles.sectionText}>When: {currentCard.eventTime || 'TBD'}</Text>
+              <Text style={styles.sectionText}>Where: {currentCard.eventLocation || currentCard.targetDistrict || 'TBD'}</Text>
+              {currentCard.eventCategory ? (
+                <Text style={styles.sectionText}>Category: {currentCard.eventCategory}</Text>
+              ) : null}
+            </View>
+          ) : null}
 
           <View style={styles.section}>
             <Text style={styles.sectionTitle}>Shared interests</Text>
@@ -493,7 +634,9 @@ export default function SwipeScreen() {
           </View>
 
           <View style={styles.section}>
-            <Text style={styles.sectionTitle}>Their profile interests</Text>
+            <Text style={styles.sectionTitle}>
+              {currentCard.cardType === 'event' ? 'Event tags' : 'Their profile interests'}
+            </Text>
             <View style={styles.tagWrap}>
               {(currentCard.targetInterests.length
                 ? currentCard.targetInterests
@@ -588,18 +731,6 @@ const styles = StyleSheet.create({
     textAlign: 'center',
     marginBottom: 8,
   },
-  metricRow: { flexDirection: 'row', gap: 8, marginBottom: 8 },
-  metricChip: {
-    flex: 1,
-    borderRadius: 10,
-    borderWidth: 1,
-    borderColor: '#E2B13B',
-    backgroundColor: '#FFF8D6',
-    paddingVertical: 8,
-    alignItems: 'center',
-  },
-  metricLabel: { fontSize: 11, color: '#2E7D32', fontWeight: '700' },
-  metricValue: { fontSize: 14, color: '#1B5E20', fontWeight: '800', marginTop: 2 },
   infoText: {
     fontSize: 15,
     color: '#1B5E20',
@@ -619,6 +750,11 @@ const styles = StyleSheet.create({
     fontWeight: '700',
     color: '#1B5E20',
     marginBottom: 4,
+  },
+  sectionText: {
+    fontSize: 14,
+    color: '#2E7D32',
+    lineHeight: 20,
   },
   tagWrap: { flexDirection: 'row', flexWrap: 'wrap', gap: 6 },
   tag: {

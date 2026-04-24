@@ -2,7 +2,7 @@ import React, { useEffect, useState } from 'react';
 import { Alert, FlatList, Pressable, StyleSheet, Text, View } from 'react-native';
 import { useRouter } from 'expo-router';
 import { useFocusEffect } from '@react-navigation/native';
-import { deleteDoc, doc, getDocs, query, collection, where } from 'firebase/firestore';
+import { deleteDoc, doc, getDocs, query, collection, where, limit } from 'firebase/firestore';
 import { db } from '../../utils/firebase';
 import { useAuthRole } from '../../store/authRole';
 import { COLORS, SHADOW } from '../../lib/theme';
@@ -31,19 +31,37 @@ export default function RequestsScreen() {
   const router = useRouter();
   const [items, setItems] = useState<RequestItem[]>([]);
   const [matches, setMatches] = useState<MatchItem[]>([]);
+  const [loading, setLoading] = useState(true);
 
   const fetchItems = async () => {
     if (!uid) return;
+    setLoading(true);
     try {
-      const snap = await getDocs(query(collection(db, 'tasks'), where('posted_by', '==', uid)));
+      const [snap, matchSnap] = await Promise.all([
+        getDocs(query(collection(db, 'tasks'), where('posted_by', '==', uid), limit(50))),
+        getDocs(
+          query(
+            collection(db, 'matches'),
+            where('elderlyId', '==', uid),
+            where('activityType', '==', 'task'),
+            limit(20)
+          )
+        ),
+      ]);
       setItems(snap.docs.map((d) => ({ id: d.id, ...d.data() })) as RequestItem[]);
-      const matchSnap = await getDocs(
-        query(collection(db, 'matches'), where('elderlyId', '==', uid), where('activityType', '==', 'task'))
-      );
       setMatches(matchSnap.docs.map((d) => ({ id: d.id, ...d.data() })) as MatchItem[]);
     } catch (error) {
       console.error('Failed to load requests:', error);
+    } finally {
+      setLoading(false);
     }
+  };
+
+  const removeTask = async (taskId: string) => {
+    await deleteDoc(doc(db, 'tasks', taskId));
+    setItems((prev) => prev.filter((item) => item.id !== taskId));
+    // Refresh in background to keep interested-youth section in sync.
+    void fetchItems();
   };
 
   useEffect(() => {
@@ -74,7 +92,9 @@ export default function RequestsScreen() {
         <Text style={styles.addBtnText}>{t(language, 'newHelpBtn')}</Text>
       </Pressable>
       <Text style={styles.section}>{t(language, 'sectionInterested')}</Text>
-      {matches.length === 0 ? (
+      {loading ? (
+        <Text style={styles.emptyInline}>{t(language, 'loadingActivities')}</Text>
+      ) : matches.length === 0 ? (
         <Text style={styles.emptyInline}>{t(language, 'noMatchYet')}</Text>
       ) : (
         <View style={{ marginBottom: 12, gap: 8 }}>
@@ -96,7 +116,7 @@ export default function RequestsScreen() {
       <FlatList
         data={items}
         keyExtractor={(item) => item.id}
-        ListEmptyComponent={<Text style={styles.empty}>{t(language, 'noRequests')}</Text>}
+        ListEmptyComponent={<Text style={styles.empty}>{loading ? t(language, 'loadingActivities') : t(language, 'noRequests')}</Text>}
         renderItem={({ item }) => (
           <View style={styles.card}>
             <Text style={styles.title}>{item.title}</Text>
@@ -116,8 +136,7 @@ export default function RequestsScreen() {
               <Pressable
                 style={[styles.actionBtn, styles.deleteBtn]}
                 onPress={async () => {
-                  await deleteDoc(doc(db, 'tasks', item.id));
-                  void fetchItems();
+                  await removeTask(item.id);
                 }}>
                 <Text style={styles.actionText}>{t(language, 'delete')}</Text>
               </Pressable>

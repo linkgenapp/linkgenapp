@@ -24,6 +24,26 @@ type UserRecord = {
   interests_text?: string;
 };
 
+const PRECOMPUTED_FAKE_ELDERLY: MatchProfile[] = FAKE_ELDERLY_PROFILES.map((item) => ({
+  uid: item.id,
+  displayName: item.name,
+  role: 'elderly',
+  district: item.district,
+  latitude: item.latitude,
+  longitude: item.longitude,
+  interests: parseInterests(item.interests),
+}));
+
+const PRECOMPUTED_FAKE_YOUTH: MatchProfile[] = FAKE_YOUTH_PROFILES.map((item) => ({
+  uid: item.id,
+  displayName: item.name,
+  role: 'youth',
+  district: item.district,
+  latitude: item.latitude,
+  longitude: item.longitude,
+  interests: parseInterests(item.interests),
+}));
+
 export default function MatchesScreen() {
   const { uid, role, language } = useAuthRole();
   const [matches, setMatches] = useState<RankedMatch[]>([]);
@@ -68,6 +88,22 @@ export default function MatchesScreen() {
     };
   };
 
+  const buildFastCurrentProfile = useCallback((): MatchProfile => {
+    const region = REGION_COORDINATES[0];
+    return {
+      uid: uid ?? `guest-${role}`,
+      displayName: role === 'elderly' ? 'Demo Elderly' : 'Demo Youth',
+      role,
+      district: region.key,
+      latitude: region.latitude,
+      longitude: region.longitude,
+      interests:
+        role === 'elderly'
+          ? ['tea', 'walking', 'companionship']
+          : ['community', 'digital_help', 'walking'],
+    };
+  }, [role, uid]);
+
   const fetchRankedMatches = useCallback(async () => {
     if (!uid) {
       setMatches([]);
@@ -77,8 +113,28 @@ export default function MatchesScreen() {
 
     setLoading(true);
     try {
-      const selfSnap = await getDoc(doc(db, 'users', uid));
+      if (sourceMode === 'fake') {
+        const fastCurrent = buildFastCurrentProfile();
+        const fakeOthers = role === 'youth' ? PRECOMPUTED_FAKE_ELDERLY : PRECOMPUTED_FAKE_YOUTH;
+        setProfileReady(true);
+        setMatches(rankMatches(fastCurrent, fakeOthers, 30));
+        setLoading(false);
 
+        // Hydrate from Firestore profile in background without blocking initial render.
+        try {
+          const selfSnap = await getDoc(doc(db, 'users', uid));
+          const selfData = selfSnap.data() as UserRecord | undefined;
+          const hydrated = selfData ? toProfile(uid, selfData) : null;
+          if (hydrated) {
+            setMatches(rankMatches(hydrated, fakeOthers, 30));
+          }
+        } catch {
+          // Keep fast fallback results.
+        }
+        return;
+      }
+
+      const selfSnap = await getDoc(doc(db, 'users', uid));
       const selfData = selfSnap.data() as UserRecord | undefined;
       const current = selfData ? toProfile(uid, selfData) : null;
 
@@ -97,26 +153,6 @@ export default function MatchesScreen() {
           .map((item) => toProfile(item.id, item.data() as UserRecord))
           .filter((value): value is MatchProfile => value !== null)
           .filter((value) => value.uid !== uid);
-      } else {
-        others = role === 'youth'
-          ? FAKE_ELDERLY_PROFILES.map((item) => ({
-              uid: item.id,
-              displayName: item.name,
-              role: 'elderly' as const,
-              district: item.district,
-              latitude: item.latitude,
-              longitude: item.longitude,
-              interests: parseInterests(item.interests),
-            }))
-          : FAKE_YOUTH_PROFILES.map((item) => ({
-              uid: item.id,
-              displayName: item.name,
-              role: 'youth' as const,
-              district: item.district,
-              latitude: item.latitude,
-              longitude: item.longitude,
-              interests: parseInterests(item.interests),
-            }));
       }
 
       setProfileReady(true);
@@ -137,12 +173,6 @@ export default function MatchesScreen() {
     <View style={styles.card}>
       <Text style={styles.rank}>#{index + 1}</Text>
       <Text style={styles.title}>{item.targetName}</Text>
-      <Text style={styles.detail}>
-        Final score: {item.finalScore.toFixed(3)}
-      </Text>
-      <Text style={styles.detail}>
-        Jaccard: {item.jaccardScore.toFixed(3)}
-      </Text>
       <Text style={styles.detail}>Distance: {item.distanceKm.toFixed(2)} km</Text>
       <Text style={styles.detail}>
         District:{' '}
@@ -205,7 +235,7 @@ export default function MatchesScreen() {
               </Pressable>
             </View>
             <Pressable style={styles.refreshBtn} onPress={fetchRankedMatches}>
-              <Text style={styles.refreshText}>Refresh scores</Text>
+              <Text style={styles.refreshText}>Refresh matches</Text>
             </Pressable>
           </View>
         }
