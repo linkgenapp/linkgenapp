@@ -167,6 +167,42 @@ export default function SwipeScreen() {
 
   const normalizeInterest = (value: string) => value.trim().toLowerCase();
 
+  const buildFakePeopleCards = useCallback(
+    (currentProfile: MatchProfile): SwipeCard[] => {
+      const fakeProfiles: MatchProfile[] =
+        role === 'youth'
+          ? FAKE_ELDERLY_PROFILES.map((item) => ({
+              uid: item.id,
+              displayName: item.name,
+              role: 'elderly',
+              district: districtToRegionKey(item.district) ?? item.district,
+              latitude: item.latitude,
+              longitude: item.longitude,
+              interests: parseInterests(item.interests),
+            }))
+          : FAKE_YOUTH_PROFILES.map((item) => ({
+              uid: item.id,
+              displayName: item.name,
+              role: 'youth',
+              district: item.district,
+              latitude: item.latitude,
+              longitude: item.longitude,
+              interests: parseInterests(item.interests),
+            }));
+
+      const ranked = rankMatches(currentProfile, fakeProfiles, 120);
+      const fakeMap = new Map(fakeProfiles.map((item) => [item.uid, item]));
+      return ranked.map((item) => ({
+        cardType: 'person',
+        ...item,
+        baseFinalScore: item.finalScore,
+        adaptiveScore: item.finalScore,
+        targetInterests: fakeMap.get(item.targetUid)?.interests ?? [],
+      }));
+    },
+    [role]
+  );
+
   const applyBehaviorLearning = (rankedCards: SwipeCard[], events: SwipeEventRow[]): SwipeCard[] => {
     if (!events.length || !rankedCards.length) {
       return rankedCards
@@ -358,37 +394,13 @@ export default function SwipeScreen() {
           adaptiveScore: item.finalScore,
           targetInterests: interestsByUid.get(item.targetUid) ?? [],
         }));
-      } else {
-        const fakeProfiles: MatchProfile[] =
-          role === 'youth'
-            ? FAKE_ELDERLY_PROFILES.map((item) => ({
-                uid: item.id,
-                displayName: item.name,
-                role: 'elderly',
-                district: districtToRegionKey(item.district) ?? item.district,
-                latitude: item.latitude,
-                longitude: item.longitude,
-                interests: parseInterests(item.interests),
-              }))
-            : FAKE_YOUTH_PROFILES.map((item) => ({
-                uid: item.id,
-                displayName: item.name,
-                role: 'youth',
-                district: item.district,
-                latitude: item.latitude,
-                longitude: item.longitude,
-                interests: parseInterests(item.interests),
-              }));
 
-        const ranked = rankMatches(currentProfile, fakeProfiles, 120);
-        const fakeMap = new Map(fakeProfiles.map((item) => [item.uid, item]));
-        peopleCards = ranked.map((item) => ({
-          cardType: 'person',
-          ...item,
-          baseFinalScore: item.finalScore,
-          adaptiveScore: item.finalScore,
-          targetInterests: fakeMap.get(item.targetUid)?.interests ?? [],
-        }));
+        // Keep decks non-empty for elderly users when smart source is sparse.
+        if (!peopleCards.length) {
+          peopleCards = buildFakePeopleCards(currentProfile);
+        }
+      } else {
+        peopleCards = buildFakePeopleCards(currentProfile);
       }
 
       const eventCards = await fetchEventCards(currentProfile);
@@ -402,7 +414,14 @@ export default function SwipeScreen() {
         nextCards = [...peopleCards, ...eventCards].sort((a, b) => b.adaptiveScore - a.adaptiveScore);
       }
 
-      const eventsSnap = await getDocs(query(collection(db, 'swipe_events'), where('userId', '==', uid)));
+      if (!nextCards.length) {
+        // Final guard: always provide a people deck fallback.
+        nextCards = buildFakePeopleCards(currentProfile);
+      }
+
+      const eventsSnap = await getDocs(
+        query(collection(db, 'swipe_events'), where('userId', '==', uid), limit(120))
+      );
       const events = eventsSnap.docs.map((d) => d.data()) as SwipeEventRow[];
       const personalized = applyBehaviorLearning(nextCards, events);
 
@@ -415,7 +434,7 @@ export default function SwipeScreen() {
     } finally {
       setLoading(false);
     }
-  }, [buildFallbackCurrent, deckMode, fetchEventCards, getRegionFromDistrict, role, swipeMode, uid]);
+  }, [buildFakePeopleCards, buildFallbackCurrent, deckMode, fetchEventCards, getRegionFromDistrict, role, swipeMode, uid]);
 
   useEffect(() => {
     fetchPeopleCards();

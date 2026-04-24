@@ -31,30 +31,44 @@ export default function RequestsScreen() {
   const router = useRouter();
   const [items, setItems] = useState<RequestItem[]>([]);
   const [matches, setMatches] = useState<MatchItem[]>([]);
-  const [loading, setLoading] = useState(true);
+  const [itemsLoading, setItemsLoading] = useState(true);
+  const [matchesLoading, setMatchesLoading] = useState(true);
 
   const fetchItems = async () => {
     if (!uid) return;
-    setLoading(true);
-    try {
-      const [snap, matchSnap] = await Promise.all([
-        getDocs(query(collection(db, 'tasks'), where('posted_by', '==', uid), limit(50))),
-        getDocs(
-          query(
-            collection(db, 'matches'),
-            where('elderlyId', '==', uid),
-            where('activityType', '==', 'task'),
-            limit(20)
-          )
-        ),
-      ]);
-      setItems(snap.docs.map((d) => ({ id: d.id, ...d.data() })) as RequestItem[]);
-      setMatches(matchSnap.docs.map((d) => ({ id: d.id, ...d.data() })) as MatchItem[]);
-    } catch (error) {
-      console.error('Failed to load requests:', error);
-    } finally {
-      setLoading(false);
-    }
+    setItemsLoading(true);
+    setMatchesLoading(true);
+
+    const tasksPromise = getDocs(query(collection(db, 'tasks'), where('posted_by', '==', uid), limit(50)))
+      .then((snap) => {
+        setItems(snap.docs.map((d) => ({ id: d.id, ...d.data() })) as RequestItem[]);
+      })
+      .catch((error) => {
+        console.error('Failed to load tasks:', error);
+      })
+      .finally(() => {
+        setItemsLoading(false);
+      });
+
+    const matchesPromise = getDocs(
+      query(
+        collection(db, 'matches'),
+        where('elderlyId', '==', uid),
+        where('activityType', '==', 'task'),
+        limit(20)
+      )
+    )
+      .then((matchSnap) => {
+        setMatches(matchSnap.docs.map((d) => ({ id: d.id, ...d.data() })) as MatchItem[]);
+      })
+      .catch((error) => {
+        console.error('Failed to load task matches:', error);
+      })
+      .finally(() => {
+        setMatchesLoading(false);
+      });
+
+    await Promise.all([tasksPromise, matchesPromise]);
   };
 
   const removeTask = async (taskId: string) => {
@@ -92,7 +106,7 @@ export default function RequestsScreen() {
         <Text style={styles.addBtnText}>{t(language, 'newHelpBtn')}</Text>
       </Pressable>
       <Text style={styles.section}>{t(language, 'sectionInterested')}</Text>
-      {loading ? (
+      {matchesLoading ? (
         <Text style={styles.emptyInline}>{t(language, 'loadingActivities')}</Text>
       ) : matches.length === 0 ? (
         <Text style={styles.emptyInline}>{t(language, 'noMatchYet')}</Text>
@@ -116,7 +130,9 @@ export default function RequestsScreen() {
       <FlatList
         data={items}
         keyExtractor={(item) => item.id}
-        ListEmptyComponent={<Text style={styles.empty}>{loading ? t(language, 'loadingActivities') : t(language, 'noRequests')}</Text>}
+        ListEmptyComponent={
+          <Text style={styles.empty}>{itemsLoading ? t(language, 'loadingActivities') : t(language, 'noRequests')}</Text>
+        }
         renderItem={({ item }) => (
           <View style={styles.card}>
             <Text style={styles.title}>{item.title}</Text>
