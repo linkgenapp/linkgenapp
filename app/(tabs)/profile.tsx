@@ -2,6 +2,7 @@ import React, { useEffect, useMemo, useState } from 'react';
 import { Alert, Modal, Pressable, ScrollView, StyleSheet, Text, TextInput, View } from 'react-native';
 import { useAuthRole } from '../../store/authRole';
 import { doc, getDoc, serverTimestamp, setDoc } from 'firebase/firestore';
+import { useRouter } from 'expo-router';
 import { db } from '../../utils/firebase';
 import { DISTRICTS, PROFILE_INTEREST_OPTIONS, REGION_COORDINATES } from '../../lib/constants';
 import { districtLabel, t } from '../../lib/i18n';
@@ -9,6 +10,7 @@ import { ESTATE_OPTIONS } from '../../lib/locationOptions';
 
 export default function ProfileScreen() {
   const { role, uid, setRole, language, setLanguage } = useAuthRole();
+  const router = useRouter();
   const [name, setName] = useState(role === 'elderly' ? 'Elderly User' : 'Youth User');
   const [regionKey, setRegionKey] = useState<keyof typeof DISTRICTS>('central_western');
   const [estateValue, setEstateValue] = useState<string>('');
@@ -16,6 +18,7 @@ export default function ProfileScreen() {
   const [interests, setInterests] = useState<string[]>([]);
   const [pickerMode, setPickerMode] = useState<'region' | 'estate' | null>(null);
   const [saving, setSaving] = useState(false);
+  const [switchingRole, setSwitchingRole] = useState(false);
 
   const regionPoint = useMemo(() => REGION_COORDINATES.find((item) => item.key === regionKey) ?? REGION_COORDINATES[0], [regionKey]);
 
@@ -64,26 +67,53 @@ export default function ProfileScreen() {
     loadProfile();
   }, [uid]);
 
-  const toggleInterest = (value: string) => {
+          if (saving) return;
+          if (!uid) {
+            Alert.alert('Please log in again', 'Your session expired. Please sign in and try saving again.');
+            return;
+          }
     setInterests((prev) => (prev.includes(value) ? prev.filter((item) => item !== value) : [...prev, value]));
+          const payload = {
+            user_email: uid,
+            display_name: name,
+            role,
+            district: selectedEstate?.value ?? regionKey,
+            region_key: regionKey,
+            estate_name: selectedEstate?.label ?? null,
+            bio,
+            interests,
+            interests_text: interests.join('; '),
+            latitude: locationPoint.latitude,
+            longitude: locationPoint.longitude,
+            is_verified: false,
+            languages: ['Cantonese', 'English'],
+            updatedAt: serverTimestamp(),
+          };
   };
-
-  return (
-    <View style={styles.container}>
-      <Text style={styles.title}>{t(language, 'profile')}</Text>
-      <Text style={styles.text}>
-        {t(language, 'uidLabel')}: {uid ?? '—'}
-      </Text>
-      <Text style={styles.text}>
-        {t(language, 'currentRole')}: {role === 'youth' ? t(language, 'roleYouth') : t(language, 'roleElderly')}
-      </Text>
-      <Text style={styles.label}>{t(language, 'displayName')}</Text>
-      <TextInput style={styles.input} value={name} onChangeText={setName} />
-      <Text style={styles.label}>{t(language, 'labelDistrict')}</Text>
-      <Pressable style={styles.selector} onPress={() => setPickerMode('region')}>
-        <Text style={styles.selectorLabel}>Region: {districtLabel(language, regionKey)}</Text>
-      </Pressable>
-      <Pressable style={styles.selector} onPress={() => setPickerMode('estate')}>
+            await Promise.race([
+              setDoc(doc(db, 'users', uid), payload, { merge: true }),
+              new Promise((_, reject) =>
+                setTimeout(() => reject(new Error('PROFILE_SAVE_TIMEOUT')), 1800)
+              ),
+            ]);
+            Alert.alert('Saved', 'Your profile has been updated.');
+          } catch (error) {
+            console.warn('Profile save fallback:', error);
+            // Keep demo flow smooth even when Firestore is slow/unavailable.
+            try {
+              await setDoc(
+                doc(db, 'users', uid),
+                { ...payload, updatedAt: serverTimestamp() },
+                { merge: true }
+              );
+              Alert.alert('Saved', 'Your profile has been updated.');
+            } catch (secondError) {
+              console.warn('Profile save failed:', secondError);
+              Alert.alert('Save failed', 'Unable to save profile right now. Please try again.');
+            }
+          } finally {
+            setSaving(false);
+          }
         <Text style={styles.selectorLabel}>Estate: {selectedEstate?.label ?? 'Use region center'}</Text>
       </Pressable>
       <Text style={styles.label}>{t(language, 'labelBio')}</Text>
@@ -115,10 +145,18 @@ export default function ProfileScreen() {
         </Pressable>
       </View>
       <View style={styles.row}>
-        <Pressable style={styles.btn} onPress={() => setRole('youth')}>
-          <Text style={styles.btnText}>{t(language, 'switchYouth')}</Text>
+        <Pressable
+          style={[styles.btn, switchingRole && styles.btnDisabled, role === 'youth' && styles.btnActive]}
+          onPress={() => {
+            void handleRoleSwitch('youth');
+          }}>
+          <Text style={styles.btnText}>{switchingRole ? 'Switching...' : t(language, 'switchYouth')}</Text>
         </Pressable>
-        <Pressable style={styles.btn} onPress={() => setRole('elderly')}>
+        <Pressable
+          style={[styles.btn, switchingRole && styles.btnDisabled, role === 'elderly' && styles.btnActive]}
+          onPress={() => {
+            void handleRoleSwitch('elderly');
+          }}>
           <Text style={styles.btnText}>{t(language, 'switchElderly')}</Text>
         </Pressable>
       </View>
@@ -230,6 +268,8 @@ const styles = StyleSheet.create({
   optionRow: { paddingVertical: 10, borderBottomWidth: 1, borderBottomColor: '#E8D98A' },
   optionText: { fontSize: 15, color: '#1B5E20' },
   btn: { backgroundColor: '#2E7D32', borderRadius: 10, padding: 14 },
+  btnActive: { backgroundColor: '#1B5E20' },
+  btnDisabled: { opacity: 0.7 },
   btnText: { color: 'white', fontWeight: '700', textAlign: 'center' },
   note: { marginTop: 14, color: '#2E7D32', fontSize: 14 },
 });
