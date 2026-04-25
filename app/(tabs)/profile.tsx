@@ -9,8 +9,7 @@ import { districtLabel, t } from '../../lib/i18n';
 import { ESTATE_OPTIONS } from '../../lib/locationOptions';
 
 export default function ProfileScreen() {
-  const { role, uid, setRole, language, setLanguage } = useAuthRole();
-  const router = useRouter();
+  const { role, uid, language, setLanguage } = useAuthRole();
 
   const [name, setName] = useState(role === 'elderly' ? 'Elderly User' : 'Youth User');
   const [regionKey, setRegionKey] = useState<keyof typeof DISTRICTS>('central_western');
@@ -19,7 +18,6 @@ export default function ProfileScreen() {
   const [interests, setInterests] = useState<string[]>([]);
   const [pickerMode, setPickerMode] = useState<'region' | 'estate' | null>(null);
   const [saving, setSaving] = useState(false);
-  const [switchingRole, setSwitchingRole] = useState(false);
 
   const regionPoint = useMemo(
     () => REGION_COORDINATES.find((item) => item.key === regionKey) ?? REGION_COORDINATES[0],
@@ -83,20 +81,6 @@ export default function ProfileScreen() {
     setInterests((prev) => (prev.includes(value) ? prev.filter((item) => item !== value) : [...prev, value]));
   };
 
-  const handleRoleSwitch = async (nextRole: 'youth' | 'elderly') => {
-    if (switchingRole || nextRole === role) return;
-    setSwitchingRole(true);
-    try {
-      await setRole(nextRole);
-      router.replace('/(tabs)');
-    } catch (error) {
-      console.warn('Role switch failed:', error);
-      Alert.alert('Switch failed', 'Unable to switch role right now. Please try again.');
-    } finally {
-      setSwitchingRole(false);
-    }
-  };
-
   const handleSave = async () => {
     if (saving) return;
     if (!uid) {
@@ -123,26 +107,26 @@ export default function ProfileScreen() {
       updatedAt: serverTimestamp(),
     };
 
+    const persistPromise = setDoc(doc(db, 'users', uid), payload, { merge: true });
+
     try {
       await Promise.race([
-        setDoc(doc(db, 'users', uid), payload, { merge: true }),
-        new Promise((_, reject) => {
-          setTimeout(() => reject(new Error('PROFILE_SAVE_TIMEOUT')), 1800);
+        persistPromise,
+        new Promise((resolve) => {
+          setTimeout(resolve, 650);
         }),
       ]);
       Alert.alert('Saved', 'Your profile has been updated.');
     } catch (error) {
-      console.warn('Profile save fallback:', error);
-      try {
-        await setDoc(doc(db, 'users', uid), payload, { merge: true });
-        Alert.alert('Saved', 'Your profile has been updated.');
-      } catch (secondError) {
-        console.warn('Profile save failed:', secondError);
-        Alert.alert('Save failed', 'Unable to save profile right now. Please try again.');
-      }
+      console.warn('Profile save failed:', error);
+      Alert.alert('Save failed', 'Unable to save profile right now. Please try again.');
     } finally {
       setSaving(false);
     }
+
+    void persistPromise.catch((error) => {
+      console.warn('Profile background sync failed:', error);
+    });
   };
 
   return (
@@ -196,24 +180,6 @@ export default function ProfileScreen() {
             style={[styles.chip, language === 'zh-Hans' && styles.chipActive]}
             onPress={() => setLanguage('zh-Hans')}>
             <Text style={styles.chipText}>{t(language, 'simplifiedChinese')}</Text>
-          </Pressable>
-        </View>
-
-        <View style={styles.row}>
-          <Pressable
-            style={[styles.btn, switchingRole && styles.btnDisabled, role === 'youth' && styles.btnActive]}
-            onPress={() => {
-              void handleRoleSwitch('youth');
-            }}>
-            <Text style={styles.btnText}>{switchingRole ? 'Switching...' : t(language, 'switchYouth')}</Text>
-          </Pressable>
-
-          <Pressable
-            style={[styles.btn, switchingRole && styles.btnDisabled, role === 'elderly' && styles.btnActive]}
-            onPress={() => {
-              void handleRoleSwitch('elderly');
-            }}>
-            <Text style={styles.btnText}>{t(language, 'switchElderly')}</Text>
           </Pressable>
         </View>
 
