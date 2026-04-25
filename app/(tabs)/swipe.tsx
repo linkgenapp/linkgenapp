@@ -358,82 +358,104 @@ export default function SwipeScreen() {
     }
 
     setLoading(true);
-    try {
-      const selfSnap = await getDoc(doc(db, 'users', uid));
+    // Fast local-first deck so users can start swiping immediately.
+    const quickProfile = buildFallbackCurrent();
+    const quickPeople = buildFakePeopleCards(quickProfile);
+    const quickEvents = buildSampleEvents(language).map((event) =>
+      eventToCard(
+        {
+          id: event.id,
+          name: event.name,
+          district: event.district,
+          location: event.location,
+          date: event.date,
+          time: event.time,
+          description: event.description,
+          category: event.category,
+          elderlyName: event.elderlyName,
+        },
+        quickProfile
+      )
+    );
 
-      const selfData = selfSnap.data() as UserRecord | undefined;
-      const current = selfData ? toProfile(uid, selfData) : null;
+    const quickDeck =
+      deckMode === 'people'
+        ? quickPeople
+        : deckMode === 'events'
+          ? quickEvents
+          : [...quickPeople, ...quickEvents].sort((a, b) => b.adaptiveScore - a.adaptiveScore);
 
-      let peopleCards: SwipeCard[] = [];
+    setCards(quickDeck.length ? quickDeck : quickPeople);
+    setCardIndex(0);
+    setProfileReady(true);
+    setLoading(false);
 
-      const currentProfile = current ?? buildFallbackCurrent();
+    // Hydrate with Firestore-backed data in background.
+    void (async () => {
+      try {
+        const selfSnap = await getDoc(doc(db, 'users', uid));
+        const selfData = selfSnap.data() as UserRecord | undefined;
+        const current = selfData ? toProfile(uid, selfData) : null;
 
-      if (swipeMode === 'smart') {
-        if (!currentProfile) {
-          setProfileReady(false);
-          setCards([]);
-          return;
-        }
+        let peopleCards: SwipeCard[] = [];
+        const currentProfile = current ?? quickProfile;
 
-        const othersSnap = await getDocs(
-          query(collection(db, 'users'), where('role', '==', role === 'youth' ? 'elderly' : 'youth'))
-        );
+        if (swipeMode === 'smart') {
+          const othersSnap = await getDocs(
+            query(collection(db, 'users'), where('role', '==', role === 'youth' ? 'elderly' : 'youth'), limit(120))
+          );
 
-        const others = othersSnap.docs
-          .map((item) => toProfile(item.id, item.data() as UserRecord))
-          .filter((value): value is MatchProfile => value !== null)
-          .filter((value) => value.uid !== uid);
+          const others = othersSnap.docs
+            .map((item) => toProfile(item.id, item.data() as UserRecord))
+            .filter((value): value is MatchProfile => value !== null)
+            .filter((value) => value.uid !== uid);
 
-        const ranked = rankMatches(currentProfile, others, 80);
-        const interestsByUid = new Map(others.map((item) => [item.uid, item.interests]));
+          const ranked = rankMatches(currentProfile, others, 80);
+          const interestsByUid = new Map(others.map((item) => [item.uid, item.interests]));
 
-        peopleCards = ranked.map((item) => ({
-          cardType: 'person',
-          ...item,
-          baseFinalScore: item.finalScore,
-          adaptiveScore: item.finalScore,
-          targetInterests: interestsByUid.get(item.targetUid) ?? [],
-        }));
+          peopleCards = ranked.map((item) => ({
+            cardType: 'person',
+            ...item,
+            baseFinalScore: item.finalScore,
+            adaptiveScore: item.finalScore,
+            targetInterests: interestsByUid.get(item.targetUid) ?? [],
+          }));
 
-        // Keep decks non-empty for elderly users when smart source is sparse.
-        if (!peopleCards.length) {
+          if (!peopleCards.length) {
+            peopleCards = buildFakePeopleCards(currentProfile);
+          }
+        } else {
           peopleCards = buildFakePeopleCards(currentProfile);
         }
-      } else {
-        peopleCards = buildFakePeopleCards(currentProfile);
+
+        const eventCards = await fetchEventCards(currentProfile);
+
+        let nextCards: SwipeCard[] = [];
+        if (deckMode === 'people') {
+          nextCards = peopleCards;
+        } else if (deckMode === 'events') {
+          nextCards = eventCards;
+        } else {
+          nextCards = [...peopleCards, ...eventCards].sort((a, b) => b.adaptiveScore - a.adaptiveScore);
+        }
+
+        if (!nextCards.length) {
+          nextCards = buildFakePeopleCards(currentProfile);
+        }
+
+        const eventsSnap = await getDocs(
+          query(collection(db, 'swipe_events'), where('userId', '==', uid), limit(60))
+        );
+        const events = eventsSnap.docs.map((d) => d.data()) as SwipeEventRow[];
+        const personalized = applyBehaviorLearning(nextCards, events);
+
+        setCards(personalized);
+        setCardIndex(0);
+        setProfileReady(true);
+      } catch (error) {
+        console.error('Error building swipe cards:', error);
       }
-
-      const eventCards = await fetchEventCards(currentProfile);
-
-      let nextCards: SwipeCard[] = [];
-      if (deckMode === 'people') {
-        nextCards = peopleCards;
-      } else if (deckMode === 'events') {
-        nextCards = eventCards;
-      } else {
-        nextCards = [...peopleCards, ...eventCards].sort((a, b) => b.adaptiveScore - a.adaptiveScore);
-      }
-
-      if (!nextCards.length) {
-        // Final guard: always provide a people deck fallback.
-        nextCards = buildFakePeopleCards(currentProfile);
-      }
-
-      const eventsSnap = await getDocs(
-        query(collection(db, 'swipe_events'), where('userId', '==', uid), limit(120))
-      );
-      const events = eventsSnap.docs.map((d) => d.data()) as SwipeEventRow[];
-      const personalized = applyBehaviorLearning(nextCards, events);
-
-      setCards(personalized);
-      setCardIndex(0);
-      setProfileReady(true);
-    } catch (error) {
-      console.error('Error building swipe cards:', error);
-      setCards([]);
-    } finally {
-      setLoading(false);
-    }
+    })();
   }, [buildFakePeopleCards, buildFallbackCurrent, deckMode, fetchEventCards, getRegionFromDistrict, role, swipeMode, uid]);
 
   useEffect(() => {
@@ -489,7 +511,14 @@ export default function SwipeScreen() {
       if (!current) return;
 
       pan.setValue({ x: 0, y: 0 });
-      setCardIndex((prev) => prev + 1);
+
+      // Keep deck continuous for smoother UX: rotate swiped card to the end.
+      setCards((prev) => {
+        if (prev.length <= 1) return prev;
+        const head = prev[0];
+        return [...prev.slice(1), head];
+      });
+      setCardIndex(0);
       void persistSwipe(current, direction);
     },
     [cardIndex, cards, pan, persistSwipe]
@@ -579,14 +608,22 @@ export default function SwipeScreen() {
 
       <View style={styles.modeRow}>
         <Pressable
-          style={[styles.modeBtn, swipeMode === 'fake' && styles.modeBtnActive]}
+          style={({ pressed }) => [
+            styles.modeBtn,
+            pressed && styles.modeBtnPressed,
+            swipeMode === 'fake' && styles.modeBtnActive,
+          ]}
           onPress={() => setSwipeMode('fake')}>
           <Text style={[styles.modeBtnText, swipeMode === 'fake' && styles.modeBtnTextActive]}>
             {role === 'elderly' ? 'People (Recommended)' : 'People (Recommended)'}
           </Text>
         </Pressable>
         <Pressable
-          style={[styles.modeBtn, swipeMode === 'smart' && styles.modeBtnActive]}
+          style={({ pressed }) => [
+            styles.modeBtn,
+            pressed && styles.modeBtnPressed,
+            swipeMode === 'smart' && styles.modeBtnActive,
+          ]}
           onPress={() => setSwipeMode('smart')}>
           <Text style={[styles.modeBtnText, swipeMode === 'smart' && styles.modeBtnTextActive]}>
             Smart Matches
@@ -596,17 +633,29 @@ export default function SwipeScreen() {
 
       <View style={styles.modeRow}>
         <Pressable
-          style={[styles.modeBtn, deckMode === 'people' && styles.modeBtnActive]}
+          style={({ pressed }) => [
+            styles.modeBtn,
+            pressed && styles.modeBtnPressed,
+            deckMode === 'people' && styles.modeBtnActive,
+          ]}
           onPress={() => setDeckMode('people')}>
           <Text style={[styles.modeBtnText, deckMode === 'people' && styles.modeBtnTextActive]}>People</Text>
         </Pressable>
         <Pressable
-          style={[styles.modeBtn, deckMode === 'events' && styles.modeBtnActive]}
+          style={({ pressed }) => [
+            styles.modeBtn,
+            pressed && styles.modeBtnPressed,
+            deckMode === 'events' && styles.modeBtnActive,
+          ]}
           onPress={() => setDeckMode('events')}>
           <Text style={[styles.modeBtnText, deckMode === 'events' && styles.modeBtnTextActive]}>Events</Text>
         </Pressable>
         <Pressable
-          style={[styles.modeBtn, deckMode === 'mixed' && styles.modeBtnActive]}
+          style={({ pressed }) => [
+            styles.modeBtn,
+            pressed && styles.modeBtnPressed,
+            deckMode === 'mixed' && styles.modeBtnActive,
+          ]}
           onPress={() => setDeckMode('mixed')}>
           <Text style={[styles.modeBtnText, deckMode === 'mixed' && styles.modeBtnTextActive]}>Mixed</Text>
         </Pressable>
@@ -712,10 +761,14 @@ const styles = StyleSheet.create({
     alignItems: 'center',
   },
   modeBtnActive: {
-    backgroundColor: '#2E7D32',
+    backgroundColor: '#FFFFFF',
+    borderColor: '#1B5E20',
+  },
+  modeBtnPressed: {
+    backgroundColor: '#FFFFFF',
   },
   modeBtnText: { color: '#1B5E20', fontWeight: '700', fontSize: 12 },
-  modeBtnTextActive: { color: '#FFFFFF' },
+  modeBtnTextActive: { color: '#1B5E20' },
   deckWrap: {
     flex: 1,
     justifyContent: 'center',
