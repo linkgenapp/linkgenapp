@@ -1,7 +1,7 @@
 import React, { useEffect, useMemo, useState } from 'react';
-import { Modal, Pressable, ScrollView, StyleSheet, Text, TextInput, View } from 'react-native';
+import { Alert, Modal, Pressable, ScrollView, StyleSheet, Text, TextInput, View } from 'react-native';
 import { useAuthRole } from '../../store/authRole';
-import { doc, getDoc, setDoc } from 'firebase/firestore';
+import { doc, getDoc, serverTimestamp, setDoc } from 'firebase/firestore';
 import { db } from '../../utils/firebase';
 import { DISTRICTS, PROFILE_INTEREST_OPTIONS, REGION_COORDINATES } from '../../lib/constants';
 import { districtLabel, t } from '../../lib/i18n';
@@ -15,6 +15,7 @@ export default function ProfileScreen() {
   const [bio, setBio] = useState('');
   const [interests, setInterests] = useState<string[]>([]);
   const [pickerMode, setPickerMode] = useState<'region' | 'estate' | null>(null);
+  const [saving, setSaving] = useState(false);
 
   const regionPoint = useMemo(() => REGION_COORDINATES.find((item) => item.key === regionKey) ?? REGION_COORDINATES[0], [regionKey]);
 
@@ -122,30 +123,40 @@ export default function ProfileScreen() {
         </Pressable>
       </View>
       <Pressable
-        style={[styles.btn, { marginTop: 8, backgroundColor: '#16A34A' }]}
+        style={[styles.btn, { marginTop: 8, backgroundColor: saving ? '#4B5563' : '#16A34A' }]}
         onPress={async () => {
-          if (!uid) return;
-          await setDoc(
-            doc(db, 'users', uid),
-            {
-              user_email: uid,
-              display_name: name,
-              role,
-              district: selectedEstate?.label ?? regionKey,
-              region_key: regionKey,
-              estate_name: selectedEstate?.label ?? null,
-              bio,
-              interests,
-              interests_text: interests.join('; '),
-              latitude: locationPoint.latitude,
-              longitude: locationPoint.longitude,
-              is_verified: false,
-              languages: ['Cantonese', 'English'],
-            },
-            { merge: true }
-          );
+          if (!uid || saving) return;
+          setSaving(true);
+          try {
+            await setDoc(
+              doc(db, 'users', uid),
+              {
+                user_email: uid,
+                display_name: name,
+                role,
+                district: selectedEstate?.value ?? regionKey,
+                region_key: regionKey,
+                estate_name: selectedEstate?.label ?? null,
+                bio,
+                interests,
+                interests_text: interests.join('; '),
+                latitude: locationPoint.latitude,
+                longitude: locationPoint.longitude,
+                is_verified: false,
+                languages: ['Cantonese', 'English'],
+                updatedAt: serverTimestamp(),
+              },
+              { merge: true }
+            );
+            Alert.alert('Saved', 'Your profile has been updated.');
+          } catch (error) {
+            console.warn('Profile save failed:', error);
+            Alert.alert('Save failed', 'Unable to save profile right now. Please try again.');
+          } finally {
+            setSaving(false);
+          }
         }}>
-        <Text style={styles.btnText}>{t(language, 'saveProfile')}</Text>
+        <Text style={styles.btnText}>{saving ? 'Saving...' : t(language, 'saveProfile')}</Text>
       </Pressable>
       <Text style={styles.note}>{t(language, 'noteDemo')}</Text>
 

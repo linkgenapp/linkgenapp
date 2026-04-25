@@ -1,6 +1,6 @@
 import React, { createContext, useContext, useEffect, useMemo, useState } from 'react';
 import { auth, db } from '../utils/firebase';
-import { doc, getDoc, serverTimestamp, setDoc } from 'firebase/firestore';
+import { collection, doc, getDocs, limit, query, serverTimestamp, setDoc, where } from 'firebase/firestore';
 import { PROFILE_INTEREST_OPTIONS, REGION_COORDINATES } from '../lib/constants';
 
 export type UserRole = 'youth' | 'elderly';
@@ -80,6 +80,84 @@ function buildStarterProfile(
     longitude: region.longitude,
     updatedAt: serverTimestamp(),
   };
+}
+
+async function ensureBaselineUsers() {
+  try {
+    const [elderlySnap, youthSnap] = await Promise.all([
+      getDocs(query(collection(db, 'users'), where('role', '==', 'elderly'), limit(1))),
+      getDocs(query(collection(db, 'users'), where('role', '==', 'youth'), limit(1))),
+    ]);
+
+    const writes: Array<Promise<void>> = [];
+    if (elderlySnap.empty) {
+      const elderlySeeds = [
+        { uid: 'seed-elderly-1', name: 'Mrs. Chan', district: 'central_western', interests: ['tea', 'walking', 'companionship'] },
+        { uid: 'seed-elderly-2', name: 'Mr. Wong', district: 'yau_tsim_mong', interests: ['reading', 'games', 'chat'] },
+        { uid: 'seed-elderly-3', name: 'Auntie Lee', district: 'tsuen_wan', interests: ['gardening', 'cooking', 'walking'] },
+      ] as const;
+      elderlySeeds.forEach((seed) => {
+        const region = REGION_COORDINATES.find((r) => r.key === seed.district) ?? REGION_COORDINATES[0];
+        writes.push(
+          setDoc(
+            doc(db, 'users', seed.uid),
+            {
+              user_email: `${seed.uid}@linkgen.local`,
+              display_name: seed.name,
+              role: 'elderly',
+              language: 'en',
+              district: seed.district,
+              region_key: seed.district,
+              interests: seed.interests,
+              interests_text: seed.interests.join('; '),
+              latitude: region.latitude,
+              longitude: region.longitude,
+              createdAt: serverTimestamp(),
+              updatedAt: serverTimestamp(),
+            },
+            { merge: true }
+          )
+        );
+      });
+    }
+
+    if (youthSnap.empty) {
+      const youthSeeds = [
+        { uid: 'seed-youth-1', name: 'Alex', district: 'central_western', interests: ['community', 'walking', 'digital_help'] },
+        { uid: 'seed-youth-2', name: 'Mina', district: 'wan_chai', interests: ['companionship', 'reading', 'music'] },
+        { uid: 'seed-youth-3', name: 'Chris', district: 'sham_shui_po', interests: ['errands', 'games', 'chat'] },
+      ] as const;
+      youthSeeds.forEach((seed) => {
+        const region = REGION_COORDINATES.find((r) => r.key === seed.district) ?? REGION_COORDINATES[0];
+        writes.push(
+          setDoc(
+            doc(db, 'users', seed.uid),
+            {
+              user_email: `${seed.uid}@linkgen.local`,
+              display_name: seed.name,
+              role: 'youth',
+              language: 'en',
+              district: seed.district,
+              region_key: seed.district,
+              interests: seed.interests,
+              interests_text: seed.interests.join('; '),
+              latitude: region.latitude,
+              longitude: region.longitude,
+              createdAt: serverTimestamp(),
+              updatedAt: serverTimestamp(),
+            },
+            { merge: true }
+          )
+        );
+      });
+    }
+
+    if (writes.length) {
+      await Promise.all(writes);
+    }
+  } catch (error) {
+    console.warn('Baseline user seed skipped:', error);
+  }
 }
 
 export function AuthRoleProvider({ children }: { children: React.ReactNode }) {
@@ -184,6 +262,7 @@ export function AuthRoleProvider({ children }: { children: React.ReactNode }) {
     setRoleState(nextRole);
     setLanguageState(preferredLanguage);
     try {
+      await ensureBaselineUsers();
       await setDoc(
         doc(db, 'users', nextUid),
         {
@@ -212,6 +291,7 @@ export function AuthRoleProvider({ children }: { children: React.ReactNode }) {
     const nextUid = DEMO_AUTH ? toDemoUid(email) : auth?.currentUser?.uid ?? toDemoUid(email);
     setUid(nextUid);
     try {
+      await ensureBaselineUsers();
       const userSnap = await getDoc(doc(db, 'users', nextUid));
       if (userSnap.exists()) {
         const storedRole = userSnap.data().role as UserRole | undefined;
