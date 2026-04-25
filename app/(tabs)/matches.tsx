@@ -1,5 +1,6 @@
 import React, { useCallback, useEffect, useMemo, useState } from 'react';
 import { View, Text, FlatList, StyleSheet, Pressable } from 'react-native';
+import { useFocusEffect } from '@react-navigation/native';
 import { db } from '../../utils/firebase';
 import { collection, doc, getDoc, getDocs, query, where } from 'firebase/firestore';
 import { useAuthRole } from '../../store/authRole';
@@ -170,6 +171,12 @@ export default function MatchesScreen() {
     fetchRankedMatches();
   }, [fetchRankedMatches]);
 
+  useFocusEffect(
+    useCallback(() => {
+      void fetchRankedMatches();
+    }, [fetchRankedMatches])
+  );
+
   const handleRefresh = useCallback(async () => {
     setRefreshing(true);
     try {
@@ -234,12 +241,20 @@ export default function MatchesScreen() {
             <Text style={styles.subheading}>Matching with {whoYouMatchWith} near your interests and location</Text>
             <View style={styles.modeRow}>
               <Pressable
-                style={[styles.modeBtn, sourceMode === 'fake' && styles.modeBtnActive]}
+                style={({ pressed }) => [
+                  styles.modeBtn,
+                  pressed && styles.modeBtnPressed,
+                  sourceMode === 'fake' && styles.modeBtnActive,
+                ]}
                 onPress={() => setSourceMode('fake')}>
                 <Text style={[styles.modeText, sourceMode === 'fake' && styles.modeTextActive]}>Recommended</Text>
               </Pressable>
               <Pressable
-                style={[styles.modeBtn, sourceMode === 'smart' && styles.modeBtnActive]}
+                style={({ pressed }) => [
+                  styles.modeBtn,
+                  pressed && styles.modeBtnPressed,
+                  sourceMode === 'smart' && styles.modeBtnActive,
+                ]}
                 onPress={() => setSourceMode('smart')}>
                 <Text style={[styles.modeText, sourceMode === 'smart' && styles.modeTextActive]}>Community users</Text>
               </Pressable>
@@ -279,9 +294,10 @@ const styles = StyleSheet.create({
     alignItems: 'center',
     backgroundColor: '#FFF8D6',
   },
-  modeBtnActive: { backgroundColor: '#2E7D32' },
+  modeBtnActive: { backgroundColor: '#FFFFFF', borderColor: '#1B5E20' },
+  modeBtnPressed: { backgroundColor: '#FFFFFF' },
   modeText: { color: '#1B5E20', fontWeight: '700' },
-  modeTextActive: { color: '#FFFFFF' },
+  modeTextActive: { color: '#1B5E20' },
   refreshBtn: {
     marginTop: 10,
     alignSelf: 'center',
