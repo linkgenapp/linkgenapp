@@ -1,0 +1,12 @@
+const fs = require('fs');
+const content = fs.readFileSync('fake_elderly_profiles.csv', 'utf8');
+const lines = content.trim().split('\n');
+const headers = lines[0].split(',');
+console.log('Headers:', headers);
+const firstLine = lines[1].split(',');
+console.log('First line values:', firstLine);
+const obj = {};
+headers.forEach((h, i) => obj[h] = firstLine[i]);
+console.log('Row object:', obj);
+console.log('Latitude value:', obj.latitude, 'Type:', typeof obj.latitude);
+console.log('Parsed Latitude:', parseFloat(obj.latitude));
