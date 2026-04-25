@@ -50,6 +50,7 @@ export default function MatchesScreen() {
   const [profileReady, setProfileReady] = useState(true);
   const [loading, setLoading] = useState(true);
   const [sourceMode, setSourceMode] = useState<MatchSourceMode>('fake');
+  const [refreshing, setRefreshing] = useState(false);
 
   const whoYouMatchWith = useMemo(
     () => (role === 'youth' ? t(language, 'roleElderly') : t(language, 'roleYouth')),
@@ -169,9 +170,18 @@ export default function MatchesScreen() {
     fetchRankedMatches();
   }, [fetchRankedMatches]);
 
+  const handleRefresh = useCallback(async () => {
+    setRefreshing(true);
+    try {
+      await fetchRankedMatches();
+    } finally {
+      setRefreshing(false);
+    }
+  }, [fetchRankedMatches]);
+
   const renderMatchCard = ({ item, index }: { item: RankedMatch; index: number }) => (
     <View style={styles.card}>
-      <Text style={styles.rank}>#{index + 1}</Text>
+      <Text style={styles.rank}>Match #{index + 1}</Text>
       <Text style={styles.title}>{item.targetName}</Text>
       <Text style={styles.detail}>Distance: {item.distanceKm.toFixed(2)} km</Text>
       <Text style={styles.detail}>
@@ -221,21 +231,21 @@ export default function MatchesScreen() {
             <Text style={styles.heading}>
               {t(language, 'matchHeading')} ({matches.length})
             </Text>
-            <Text style={styles.subheading}>Matching with {whoYouMatchWith}</Text>
+            <Text style={styles.subheading}>Matching with {whoYouMatchWith} near your interests and location</Text>
             <View style={styles.modeRow}>
               <Pressable
                 style={[styles.modeBtn, sourceMode === 'fake' && styles.modeBtnActive]}
                 onPress={() => setSourceMode('fake')}>
-                <Text style={[styles.modeText, sourceMode === 'fake' && styles.modeTextActive]}>Synthetic</Text>
+                <Text style={[styles.modeText, sourceMode === 'fake' && styles.modeTextActive]}>Recommended</Text>
               </Pressable>
               <Pressable
                 style={[styles.modeBtn, sourceMode === 'smart' && styles.modeBtnActive]}
                 onPress={() => setSourceMode('smart')}>
-                <Text style={[styles.modeText, sourceMode === 'smart' && styles.modeTextActive]}>Live users</Text>
+                <Text style={[styles.modeText, sourceMode === 'smart' && styles.modeTextActive]}>Community users</Text>
               </Pressable>
             </View>
-            <Pressable style={styles.refreshBtn} onPress={fetchRankedMatches}>
-              <Text style={styles.refreshText}>Refresh matches</Text>
+            <Pressable style={styles.refreshBtn} onPress={handleRefresh}>
+              <Text style={styles.refreshText}>{refreshing ? 'Refreshing...' : 'Refresh matches'}</Text>
             </Pressable>
           </View>
         }
@@ -257,8 +267,8 @@ const styles = StyleSheet.create({
     padding: 12,
     marginBottom: 12,
   },
-  heading: { fontSize: 24, fontWeight: '800', marginBottom: 4, color: '#1B5E20', textAlign: 'center' },
-  subheading: { fontSize: 14, color: '#2E7D32', textAlign: 'center' },
+  heading: { fontSize: 22, fontWeight: '800', marginBottom: 4, color: '#1B5E20', textAlign: 'center' },
+  subheading: { fontSize: 13, color: '#2E7D32', textAlign: 'center', lineHeight: 18 },
   modeRow: { flexDirection: 'row', gap: 8, marginTop: 10 },
   modeBtn: {
     flex: 1,
@@ -284,15 +294,15 @@ const styles = StyleSheet.create({
   card: {
     backgroundColor: '#FFE48A',
     borderColor: '#F9A825',
-    borderWidth: 2,
+    borderWidth: 1.5,
     borderRadius: 16,
-    padding: 20,
-    marginBottom: 16,
+    padding: 16,
+    marginBottom: 12,
     ...SHADOW,
   },
-  rank: { fontSize: 12, fontWeight: '700', color: '#2E7D32', marginBottom: 4 },
-  title: { fontSize: 26, fontWeight: 'bold', marginBottom: 8, color: '#1B5E20' },
-  detail: { fontSize: 18, color: '#2E7D32', marginVertical: 2 },
-  subtle: { fontSize: 12, color: '#1B5E20', marginTop: 8 },
+  rank: { fontSize: 12, fontWeight: '700', color: '#2E7D32', marginBottom: 3 },
+  title: { fontSize: 22, fontWeight: '700', marginBottom: 6, color: '#1B5E20' },
+  detail: { fontSize: 15, color: '#2E7D32', marginVertical: 1 },
+  subtle: { fontSize: 12, color: '#1B5E20', marginTop: 6, lineHeight: 17 },
   noMatches: { fontSize: 16, textAlign: 'center', color: '#2E7D32' },
 });

@@ -582,7 +582,7 @@ export default function SwipeScreen() {
           style={[styles.modeBtn, swipeMode === 'fake' && styles.modeBtnActive]}
           onPress={() => setSwipeMode('fake')}>
           <Text style={[styles.modeBtnText, swipeMode === 'fake' && styles.modeBtnTextActive]}>
-            {role === 'elderly' ? 'People (Fake Youth)' : 'People (Fake Elderly)'}
+            {role === 'elderly' ? 'People (Recommended)' : 'People (Recommended)'}
           </Text>
         </Pressable>
         <Pressable
