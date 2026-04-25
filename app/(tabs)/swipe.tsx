@@ -82,7 +82,7 @@ export default function SwipeScreen() {
   const { uid, role, language } = useAuthRole();
   const [cards, setCards] = useState<SwipeCard[]>([]);
   const [cardIndex, setCardIndex] = useState(0);
-  const [loading, setLoading] = useState(true);
+  const [loading, setLoading] = useState(false);
   const [profileReady, setProfileReady] = useState(true);
   const [swipeMode, setSwipeMode] = useState<SwipeMode>('fake');
   const [deckMode, setDeckMode] = useState<DeckMode>('mixed');
@@ -351,13 +351,6 @@ export default function SwipeScreen() {
   );
 
   const fetchPeopleCards = useCallback(async () => {
-    if (!uid) {
-      setCards([]);
-      setLoading(false);
-      return;
-    }
-
-    setLoading(true);
     // Fast local-first deck so users can start swiping immediately.
     const quickProfile = buildFallbackCurrent();
     const quickPeople = buildFakePeopleCards(quickProfile);
@@ -389,6 +382,10 @@ export default function SwipeScreen() {
     setCardIndex(0);
     setProfileReady(true);
     setLoading(false);
+
+    if (!uid) {
+      return;
+    }
 
     // Hydrate with Firestore-backed data in background.
     void (async () => {
