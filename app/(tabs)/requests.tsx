@@ -2,7 +2,7 @@ import React, { useEffect, useState } from 'react';
 import { Alert, FlatList, Pressable, StyleSheet, Text, View } from 'react-native';
 import { useRouter } from 'expo-router';
 import { useFocusEffect } from '@react-navigation/native';
-import { deleteDoc, doc, getDocs, query, collection, where, limit } from 'firebase/firestore';
+import { deleteDoc, doc, getDoc, getDocs, query, collection, where, limit } from 'firebase/firestore';
 import { db } from '../../utils/firebase';
 import { useAuthRole } from '../../store/authRole';
 import { COLORS, SHADOW } from '../../lib/theme';
@@ -21,6 +21,7 @@ type RequestItem = {
 type MatchItem = {
   id: string;
   youthId: string;
+  youthName?: string;
   activityName: string;
   activityId: string;
   activityType: 'task' | 'event';
@@ -58,8 +59,23 @@ export default function RequestsScreen() {
         limit(20)
       )
     )
-      .then((matchSnap) => {
-        setMatches(matchSnap.docs.map((d) => ({ id: d.id, ...d.data() })) as MatchItem[]);
+      .then(async (matchSnap) => {
+        const raw = matchSnap.docs.map((d) => ({ id: d.id, ...d.data() })) as MatchItem[];
+
+        const withNames = await Promise.all(
+          raw.map(async (item) => {
+            try {
+              const userSnap = await getDoc(doc(db, 'users', item.youthId));
+              const user = userSnap.data() as { display_name?: string; name?: string } | undefined;
+              const youthName = user?.display_name ?? user?.name ?? item.youthId;
+              return { ...item, youthName };
+            } catch {
+              return { ...item, youthName: item.youthId };
+            }
+          })
+        );
+
+        setMatches(withNames);
       })
       .catch((error) => {
         console.error('Failed to load task matches:', error);
@@ -115,7 +131,7 @@ export default function RequestsScreen() {
           {matches.slice(0, 5).map((m) => (
             <View key={m.id} style={styles.matchCard}>
               <Text style={styles.matchTitle}>
-                {t(language, 'youthLabel')}: {m.youthId}
+                {t(language, 'youthLabel')}: {m.youthName ?? m.youthId}
               </Text>
               <Text style={styles.matchDetail}>
                 {t(language, 'interestedIn')}: {m.activityName}
